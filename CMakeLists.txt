@@ -10,11 +10,7 @@ SET(CMAKE_SKIP_BUILD_RPATH FALSE)
 
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
-
-set(VULKAN_SDK /Users/yasuoka/vulkansdk/macOS)
-set(VK_ICD_FILENAMES ${VULKAN_SDK}/etc/vulkan/icd.d/MoltenVK_icd.json)
-
-set(VULKAN /Users/yasuoka/vulkansdk/macOS)
+find_package(Vulkan REQUIRED)
 
 if (MSVC)
 	add_definitions(-DPLATFORM_WIN -Dssize_t=SSIZE_T)
@@ -36,12 +32,13 @@ set(INC_DIRS
 	${PROJECT_SOURCE_DIR}/src
 	${GLFW3_INCLUDE_DIR}
     ${GLM_INCLUDE_DIR}
-    ${VULKAN_SDK}/include
+    ${Vulkan_INCLUDE_DIRS}
 )
 
 set(LIBS
 	glfw
 	${GLM_LIBRARY}
+    ${Vulkan_LIBRARIES}
 )
 
 if (MSVC)
@@ -51,12 +48,8 @@ elseif (LINUX)
 	set(DLLS
 	)
 else()
-	set(LINK_DIRS
-		${VULKAN_SDK}/lib/
-	)
 	set(LIBS
 		${LIBS}
-		vulkan
 		"-framework CoreGraphics"
 	)
 	set(DLLS
