@@ -30,7 +30,6 @@ void VulkanAPI::CheckExtSupport() {
     vkEnumerateDeviceExtensionProperties(physDevice, 0, &propc, 0);
     std::vector<VkExtensionProperties> props(propc);
     vkEnumerateDeviceExtensionProperties(physDevice, 0, &propc, props.data());
-
 }
 
 void VulkanAPI::Init() {
@@ -43,8 +42,8 @@ void VulkanAPI::Init() {
     appinfo.apiVersion = VK_API_VERSION_1_0;
 
     uint32_t glfwExtensionCount = 0;
-    const char** glfwExtensions;
-    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+    const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+    if (!glfwExtensionCount) abort();
 
     VkInstanceCreateInfo createinfo = {};
     createinfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -106,8 +105,6 @@ void VulkanAPI::InitDevice() {
 }
 
 void VulkanAPI::CreateSurface() {
-    if (!glfwVulkanSupported()) abort();
-
     VKDO(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
     FNCOK
