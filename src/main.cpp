@@ -3,9 +3,6 @@
 
 #include "vulkanapi.hpp"
 
-const int WIDTH = 800;
-const int HEIGHT = 600;
-
 void error_callback(int code, const char* description)
 {
     std::cerr << "glfw error " << code << ": " << description << std::endl;
@@ -29,8 +26,6 @@ void initWindow() {
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    VulkanAPI::window = glfwCreateWindow(WIDTH, HEIGHT, "Hello Vulkan", 0, 0);
-
 }
 
 int main() {
@@ -38,6 +33,7 @@ int main() {
     VulkanAPI::Init();
     VulkanAPI::CreateSurface();
     VulkanAPI::InitDevice();
+    VulkanAPI::CreateSwapchain();
 
     while (!glfwWindowShouldClose(VulkanAPI::window)) {
         glfwPollEvents();

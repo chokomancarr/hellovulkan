@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <set>
 #include <vector>
+#include <cstdint>
+
+const uint32_t WIDTH = 800;
+const uint32_t HEIGHT = 600;
 
 VkResult result;
 
@@ -17,22 +21,20 @@ GLFWwindow* VulkanAPI::window;
 VkInstance instance;
 VkPhysicalDevice physDevice;
 VkDevice device;
+uint32_t graphicsFamily;
 VkQueue graphicsQueue;
 VkQueue presentQueue;
 VkSurfaceKHR surface;
+VkSwapchainKHR swapchain;
+std::vector<VkImage> swapchainImages;
 
 const std::vector<const char*> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
-void VulkanAPI::CheckExtSupport() {
-    uint32_t propc;
-    vkEnumerateDeviceExtensionProperties(physDevice, 0, &propc, 0);
-    std::vector<VkExtensionProperties> props(propc);
-    vkEnumerateDeviceExtensionProperties(physDevice, 0, &propc, props.data());
-}
-
 void VulkanAPI::Init() {
+    window = glfwCreateWindow(WIDTH, HEIGHT, "Hello Vulkan", 0, 0);
+
     VkApplicationInfo appinfo = {};
     appinfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appinfo.pApplicationName = "Hello Vulkan";
@@ -70,7 +72,6 @@ void VulkanAPI::InitDevice() {
     vkGetPhysicalDeviceQueueFamilyProperties(physDevice, &count, nullptr);
     std::vector<VkQueueFamilyProperties> queueFamilies(count);
     vkGetPhysicalDeviceQueueFamilyProperties(physDevice, &count, queueFamilies.data());
-    uint32_t graphicsFamily = 0;
     for (uint32_t a = 0; a < count; a++) {
         VkBool32 pres;
         VKDO(vkGetPhysicalDeviceSurfaceSupportKHR(physDevice, a, surface, &pres));
@@ -94,12 +95,13 @@ void VulkanAPI::InitDevice() {
     createInfo.pQueueCreateInfos = &queueCreateInfo;
     createInfo.queueCreateInfoCount = 1;
     createInfo.pEnabledFeatures = &deviceFeatures;
+    createInfo.enabledExtensionCount = deviceExtensions.size();
+    createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
     VKDO(vkCreateDevice(physDevice, &createInfo, nullptr, &device));
 
     vkGetDeviceQueue(device, graphicsFamily, 0, &graphicsQueue);
     presentQueue = graphicsQueue;
-
 
     FNCOK
 }
@@ -110,11 +112,87 @@ void VulkanAPI::CreateSurface() {
     FNCOK
 }
 
+void VulkanAPI::CreateSwapchain() {
+    uint32_t surfaceFormatCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physDevice, surface, &surfaceFormatCount, nullptr);
+    std::vector<VkSurfaceFormatKHR> surfaceFormats(surfaceFormatCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physDevice, surface, &surfaceFormatCount, surfaceFormats.data());
+    
+    uint32_t presentModeCount;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physDevice, surface, &presentModeCount, nullptr);
+    std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physDevice, surface, &presentModeCount, presentModes.data());
+
+    VkSurfaceCapabilitiesKHR capabilities;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physDevice, surface, &capabilities);
+
+    VkSurfaceFormatKHR surfaceFormat = surfaceFormats[0];
+    for (auto& f : surfaceFormats) {
+        if (f.format == VK_FORMAT_B8G8R8A8_UNORM && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            surfaceFormat = f;
+            break;
+        }
+    }
+
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    for (auto& p : presentModes) {
+        if (p == VK_PRESENT_MODE_MAILBOX_KHR) {
+            presentMode = p;
+            break;
+        }
+    }
+
+    VkExtent2D extent = capabilities.currentExtent;
+    if (capabilities.currentExtent.width == INT32_MAX) {
+        extent.width = std::max(std::min(WIDTH, capabilities.maxImageExtent.width),
+            capabilities.minImageExtent.width);
+        extent.height = std::max(std::min(HEIGHT, capabilities.maxImageExtent.height),
+            capabilities.minImageExtent.height);
+    }
+
+    auto imgCount = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0) imgCount = std::min(imgCount, capabilities.maxImageCount);
+
+    VkSwapchainCreateInfoKHR swapInfo = {};
+    swapInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    swapInfo.surface = surface;
+    swapInfo.minImageCount = imgCount;
+    swapInfo.imageFormat = surfaceFormat.format;
+    swapInfo.imageColorSpace = surfaceFormat.colorSpace;
+    swapInfo.imageExtent = extent;
+    swapInfo.imageArrayLayers = 1;
+    swapInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (graphicsQueue != presentQueue) {
+        swapInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        swapInfo.queueFamilyIndexCount = 2;
+        uint32_t indices[] = { graphicsFamily, graphicsFamily };
+        swapInfo.pQueueFamilyIndices = indices;
+    }
+    else {
+        swapInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+    swapInfo.preTransform = capabilities.currentTransform;
+    swapInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapInfo.presentMode = presentMode;
+    swapInfo.clipped = VK_TRUE;
+    swapInfo.oldSwapchain = VK_NULL_HANDLE;
+
+    VKDO(vkCreateSwapchainKHR(device, &swapInfo, nullptr, &swapchain));
+
+    uint32_t swapImgCnt;
+    vkGetSwapchainImagesKHR(device, swapchain, &swapImgCnt, nullptr);
+    swapchainImages.resize(swapImgCnt);
+    vkGetSwapchainImagesKHR(device, swapchain, &swapImgCnt, swapchainImages.data());
+
+    FNCOK
+}
+
 void VulkanAPI::DestroySurface() {
     vkDestroySurfaceKHR(instance, surface, nullptr);
 }
 
 void VulkanAPI::Exit() {
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
     vkDestroyDevice(device, nullptr);
 
     vkDestroyInstance(instance, nullptr);

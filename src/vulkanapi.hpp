@@ -5,11 +5,10 @@ class VulkanAPI {
 public:
     static GLFWwindow* window;
 
-    static void CheckExtSupport();
-
     static void Init();
-    static void InitDevice();
     static void CreateSurface();
+    static void InitDevice();
+    static void CreateSwapchain();
     static void DestroySurface();
 
     static void Exit();
