@@ -9,6 +9,8 @@
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
 
+const uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+
 VkResult result;
 
 #define VKDO(cmd) if ((result = cmd) != VK_SUCCESS) {\
@@ -17,7 +19,7 @@ VkResult result;
 }
 #define FNCOK std::cout << __func__ << "() ok" << std::endl;
 
-GLFWwindow* VulkanAPI::window;
+GLFWwindow* Vulkan::window;
 
 VkInstance instance;
 VkPhysicalDevice physDevice;
@@ -31,15 +33,22 @@ VkExtent2D extent;
 VkSwapchainKHR swapchain;
 std::vector<VkImage> swapchainImages;
 std::vector<VkImageView> swapchainImageViews;
+std::vector<VkFramebuffer> swapchainFramebuffers;
+std::vector<VkCommandBuffer> commandBuffers;
 VkRenderPass renderPass;
 VkPipelineLayout pipelineLayout;
 VkPipeline pipeline;
+VkCommandPool commandPool;
+VkSemaphore imgReadySemaphore[MAX_FRAMES_IN_FLIGHT];
+VkSemaphore rendFinSemaphore[MAX_FRAMES_IN_FLIGHT];
+VkFence rendFences[MAX_FRAMES_IN_FLIGHT];
+std::vector<VkFence> imagesInFlight;
 
 const std::vector<const char*> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 
-void VulkanAPI::Init() {
+void Vulkan::Init() {
     window = glfwCreateWindow(WIDTH, HEIGHT, "Hello Vulkan", 0, 0);
 
     VkApplicationInfo appinfo = {};
@@ -66,7 +75,7 @@ void VulkanAPI::Init() {
     FNCOK
 }
 
-void VulkanAPI::InitDevice() {
+void Vulkan::InitDevice() {
     uint32_t count = 0;
     VKDO(vkEnumeratePhysicalDevices(instance, &count, nullptr));
     std::cout << "available physical devices: " << count << std::endl;
@@ -113,13 +122,13 @@ void VulkanAPI::InitDevice() {
     FNCOK
 }
 
-void VulkanAPI::CreateSurface() {
+void Vulkan::CreateSurface() {
     VKDO(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
     FNCOK
 }
 
-void VulkanAPI::CreateSwapchain() {
+void Vulkan::CreateSwapchain() {
     uint32_t surfaceFormatCount;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physDevice, surface, &surfaceFormatCount, nullptr);
     std::vector<VkSurfaceFormatKHR> surfaceFormats(surfaceFormatCount);
@@ -196,7 +205,7 @@ void VulkanAPI::CreateSwapchain() {
     CreateImageViews();
 }
 
-void VulkanAPI::CreateImageViews() {
+void Vulkan::CreateImageViews() {
     for (const auto& image : swapchainImages) {
         VkImageViewCreateInfo info = {};
         info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -234,7 +243,7 @@ VkShaderModule CreateShaderModule(const std::vector<char>& code) {
     return mod;
 }
 
-void VulkanAPI::CreateRenderPass() {
+void Vulkan::CreateRenderPass() {
     VkAttachmentDescription colorAtt = {};
     colorAtt.format = surfaceFormat.format;
     colorAtt.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -254,19 +263,30 @@ void VulkanAPI::CreateRenderPass() {
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &attRef;
 
+    VkSubpassDependency dep = {};
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = 0;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
     VkRenderPassCreateInfo passInfo = {};
     passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     passInfo.attachmentCount = 1;
     passInfo.pAttachments = &colorAtt;
     passInfo.subpassCount = 1;
     passInfo.pSubpasses = &subpass;
+    passInfo.dependencyCount = 1;
+    passInfo.pDependencies = &dep;
 
     VKDO(vkCreateRenderPass(device, &passInfo, nullptr, &renderPass));
+
 
     FNCOK
 }
 
-void VulkanAPI::CreateGraphicsPipeline() {
+void Vulkan::CreateGraphicsPipeline() {
     auto vertCode = FileReader::ReadBytes("tri_v.spv");
     auto fragCode = FileReader::ReadBytes("tri_f.spv");
 
@@ -332,7 +352,7 @@ void VulkanAPI::CreateGraphicsPipeline() {
     VkPipelineColorBlendAttachmentState blendState = {};
     blendState.colorWriteMask = 
         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     blendState.blendEnable = VK_TRUE;
     blendState.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -374,19 +394,154 @@ void VulkanAPI::CreateGraphicsPipeline() {
     FNCOK
 }
 
-void VulkanAPI::DestroySurface() {
-    vkDestroySurfaceKHR(instance, surface, nullptr);
+void Vulkan::CreateFramebuffers() {
+    for (auto& v : swapchainImageViews) {
+        VkImageView atts[] = { v };
+
+        VkFramebufferCreateInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        info.renderPass = renderPass;
+        info.attachmentCount = 1;
+        info.pAttachments = atts;
+        info.width = extent.width;
+        info.height = extent.height;
+        info.layers = 1;
+
+        VkFramebuffer fbo;
+        VKDO(vkCreateFramebuffer(device, &info, nullptr, &fbo));
+
+        swapchainFramebuffers.push_back(fbo);
+    }
+
+    FNCOK
 }
 
-void VulkanAPI::Exit() {
+void Vulkan::CreateCommandPool() {
+    VkCommandPoolCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    info.queueFamilyIndex = graphicsFamily;
+    info.flags = 0;
+    VKDO(vkCreateCommandPool(device, &info, nullptr, &commandPool));
+
+    FNCOK
+}
+
+void Vulkan::CreateCommandBuffers() {
+    const auto n = (uint32_t)swapchainFramebuffers.size();
+
+    VkCommandBufferAllocateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    info.commandPool = commandPool;
+    info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    info.commandBufferCount = n;
+    commandBuffers.resize(n);
+    VKDO(vkAllocateCommandBuffers(device, &info, commandBuffers.data()));
+
+    VkCommandBufferBeginInfo binfo = {};
+    binfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    binfo.flags = 0;
+    for (uint32_t a = 0; a < n; a++) {
+        auto& buf = commandBuffers[a];
+        VKDO(vkBeginCommandBuffer(buf, &binfo));
+        VkRenderPassBeginInfo pinfo = {};
+        pinfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        pinfo.renderPass = renderPass;
+        pinfo.framebuffer = swapchainFramebuffers[a];
+        pinfo.renderArea.extent = extent;
+        VkClearValue cv = {};
+        cv.color = {{ 0.f, 0.f, 1.f, 1.f }};
+        pinfo.clearValueCount = 1;
+        pinfo.pClearValues = &cv;
+        vkCmdBeginRenderPass(buf, &pinfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(buf, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdDraw(buf, 3, 1, 0, 0);
+
+        vkCmdEndRenderPass(buf);
+        VKDO(vkEndCommandBuffer(buf));
+    }
+}
+
+void Vulkan::CreateSemaphores() {
+    VkSemaphoreCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkFenceCreateInfo finfo = {};
+    finfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    finfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    for (uint32_t a = 0; a < MAX_FRAMES_IN_FLIGHT; a++) {
+        VKDO(vkCreateSemaphore(device, &info, nullptr, &imgReadySemaphore[a]));
+        VKDO(vkCreateSemaphore(device, &info, nullptr, &rendFinSemaphore[a]));
+        VKDO(vkCreateFence(device, &finfo, nullptr, &rendFences[a]));
+    }
+    imagesInFlight.resize(swapchainImages.size(), VK_NULL_HANDLE);
+}
+
+uint32_t currentFrame = 0;
+
+void Vulkan::DrawFrame() {
+    uint32_t id;
+    vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imgReadySemaphore[currentFrame], VK_NULL_HANDLE, &id);
+    
+    auto& fence = rendFences[currentFrame];
+
+    if (imagesInFlight[id] != VK_NULL_HANDLE) {
+        vkWaitForFences(device, 1, &imagesInFlight[id], VK_TRUE, UINT64_MAX);
+    }
+    imagesInFlight[id] = fence;
+
+    vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+    vkResetFences(device, 1, &fence);
+
+    VkSubmitInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    VkSemaphore waitSema[] = { imgReadySemaphore[currentFrame] };
+    VkPipelineStageFlags flags[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    info.waitSemaphoreCount = 1;
+    info.pWaitSemaphores = waitSema;
+    info.pWaitDstStageMask = flags;
+    info.commandBufferCount = 1;
+    info.pCommandBuffers = &commandBuffers[id];
+    VkSemaphore sigSema[] = { rendFinSemaphore[currentFrame] };
+    info.signalSemaphoreCount = 1;
+    info.pSignalSemaphores = sigSema;
+
+    VKDO(vkQueueSubmit(graphicsQueue, 1, &info, fence));
+
+    VkPresentInfoKHR presInfo = {};
+    presInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presInfo.waitSemaphoreCount = 1;
+    presInfo.pWaitSemaphores = sigSema;
+    VkSwapchainKHR swapchains[] = { swapchain };
+    presInfo.swapchainCount = 1;
+    presInfo.pSwapchains = swapchains;
+    presInfo.pImageIndices = &id;
+    vkQueuePresentKHR(presentQueue, &presInfo);
+
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void Vulkan::Exit() {
+    vkDeviceWaitIdle(device);
+    for (uint32_t a = 0; a < MAX_FRAMES_IN_FLIGHT; a++) {
+        vkDestroyFence(device, rendFences[a], nullptr);
+        vkDestroySemaphore(device, rendFinSemaphore[a], nullptr);
+        vkDestroySemaphore(device, imgReadySemaphore[a], nullptr);
+    }
+    vkDestroyCommandPool(device, commandPool, nullptr);
+    for (auto f : swapchainFramebuffers) {
+        vkDestroyFramebuffer(device, f, nullptr);
+    }
     vkDestroyPipeline(device, pipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
     for (auto v : swapchainImageViews) {
         vkDestroyImageView(device, v, nullptr);
     }
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    vkDestroySwapchainKHR(device, swapchain, nullptr); //<- bad instruction here sometimes
     vkDestroyDevice(device, nullptr);
 
+    vkDestroySurfaceKHR(instance, surface, nullptr);
     vkDestroyInstance(instance, nullptr);
 }

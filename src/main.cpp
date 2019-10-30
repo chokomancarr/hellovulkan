@@ -30,19 +30,23 @@ void initWindow() {
 
 int main() {
     initWindow();
-    VulkanAPI::Init();
-    VulkanAPI::CreateSurface();
-    VulkanAPI::InitDevice();
-    VulkanAPI::CreateSwapchain();
-    VulkanAPI::CreateRenderPass();
-    VulkanAPI::CreateGraphicsPipeline();
+    Vulkan::Init();
+    Vulkan::CreateSurface();
+    Vulkan::InitDevice();
+    Vulkan::CreateSwapchain();
+    Vulkan::CreateRenderPass();
+    Vulkan::CreateGraphicsPipeline();
+    Vulkan::CreateFramebuffers();
+    Vulkan::CreateCommandPool();
+    Vulkan::CreateCommandBuffers();
+    Vulkan::CreateSemaphores();
 
-    while (!glfwWindowShouldClose(VulkanAPI::window)) {
+    while (!glfwWindowShouldClose(Vulkan::window)) {
         glfwPollEvents();
+        Vulkan::DrawFrame();
     }
 
-    VulkanAPI::DestroySurface();
-    VulkanAPI::Exit();
-    glfwDestroyWindow(VulkanAPI::window);
+    Vulkan::Exit();
+    glfwDestroyWindow(Vulkan::window);
     glfwTerminate();
 }
