@@ -9,7 +9,10 @@ public:
     static void CreateSurface();
     static void InitDevice();
     static void CreateSwapchain();
-    static void DestroySurface();
+    static void CreateImageViews();
+    static void CreateRenderPass();
+    static void CreateGraphicsPipeline();
 
+    static void DestroySurface();
     static void Exit();
 };

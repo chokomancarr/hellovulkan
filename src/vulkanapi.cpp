@@ -4,6 +4,7 @@
 #include <set>
 #include <vector>
 #include <cstdint>
+#include "filereader.hpp"
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -25,8 +26,14 @@ uint32_t graphicsFamily;
 VkQueue graphicsQueue;
 VkQueue presentQueue;
 VkSurfaceKHR surface;
+VkSurfaceFormatKHR surfaceFormat;
+VkExtent2D extent;
 VkSwapchainKHR swapchain;
 std::vector<VkImage> swapchainImages;
+std::vector<VkImageView> swapchainImageViews;
+VkRenderPass renderPass;
+VkPipelineLayout pipelineLayout;
+VkPipeline pipeline;
 
 const std::vector<const char*> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -126,7 +133,7 @@ void VulkanAPI::CreateSwapchain() {
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physDevice, surface, &capabilities);
 
-    VkSurfaceFormatKHR surfaceFormat = surfaceFormats[0];
+    surfaceFormat = surfaceFormats[0];
     for (auto& f : surfaceFormats) {
         if (f.format == VK_FORMAT_B8G8R8A8_UNORM && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             surfaceFormat = f;
@@ -142,7 +149,7 @@ void VulkanAPI::CreateSwapchain() {
         }
     }
 
-    VkExtent2D extent = capabilities.currentExtent;
+    extent = capabilities.currentExtent;
     if (capabilities.currentExtent.width == INT32_MAX) {
         extent.width = std::max(std::min(WIDTH, capabilities.maxImageExtent.width),
             capabilities.minImageExtent.width);
@@ -185,6 +192,186 @@ void VulkanAPI::CreateSwapchain() {
     vkGetSwapchainImagesKHR(device, swapchain, &swapImgCnt, swapchainImages.data());
 
     FNCOK
+
+    CreateImageViews();
+}
+
+void VulkanAPI::CreateImageViews() {
+    for (const auto& image : swapchainImages) {
+        VkImageViewCreateInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        info.image = image;
+        info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        info.format = surfaceFormat.format;
+        info.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY
+        };
+        info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        info.subresourceRange.baseMipLevel = 0;
+        info.subresourceRange.levelCount = 1;
+        info.subresourceRange.baseArrayLayer = 0;
+        info.subresourceRange.layerCount = 1;
+        
+        VkImageView view;
+        VKDO(vkCreateImageView(device, &info, nullptr, &view));
+
+        swapchainImageViews.push_back(view);
+    }
+
+    FNCOK
+}
+
+VkShaderModule CreateShaderModule(const std::vector<char>& code) {
+    VkShaderModuleCreateInfo info;
+    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    info.codeSize = code.size();
+    info.pCode = (const uint32_t*)code.data();
+    VkShaderModule mod;
+    VKDO(vkCreateShaderModule(device, &info, nullptr, &mod));
+    return mod;
+}
+
+void VulkanAPI::CreateRenderPass() {
+    VkAttachmentDescription colorAtt = {};
+    colorAtt.format = surfaceFormat.format;
+    colorAtt.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAtt.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAtt.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAtt.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference attRef = {};
+    attRef.attachment = 0;
+    attRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass = {};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &attRef;
+
+    VkRenderPassCreateInfo passInfo = {};
+    passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    passInfo.attachmentCount = 1;
+    passInfo.pAttachments = &colorAtt;
+    passInfo.subpassCount = 1;
+    passInfo.pSubpasses = &subpass;
+
+    VKDO(vkCreateRenderPass(device, &passInfo, nullptr, &renderPass));
+
+    FNCOK
+}
+
+void VulkanAPI::CreateGraphicsPipeline() {
+    auto vertCode = FileReader::ReadBytes("tri_v.spv");
+    auto fragCode = FileReader::ReadBytes("tri_f.spv");
+
+    auto vert = CreateShaderModule(vertCode);
+    auto frag = CreateShaderModule(fragCode);
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+
+    auto& infov = stages[0];
+    infov.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    infov.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    infov.module = vert;
+    infov.pName = "main";
+
+    auto& infof = stages[1];
+    infof.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    infof.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    infof.module = frag;
+    infof.pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo inputInfo = {};
+    inputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    inputInfo.vertexBindingDescriptionCount = 0;
+    inputInfo.vertexAttributeDescriptionCount = 0;
+
+    VkPipelineInputAssemblyStateCreateInfo assemInfo = {};
+    assemInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    assemInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    assemInfo.primitiveRestartEnable = VK_FALSE;
+
+    VkViewport viewport = {};
+    viewport.x = 0;
+    viewport.y = 0;
+    viewport.width = extent.width;
+    viewport.height = extent.height;
+    viewport.minDepth = 0;
+    viewport.maxDepth = 1;
+
+    VkRect2D scissor;
+    scissor.offset = { 0, 0 };
+    scissor.extent = extent;
+
+    VkPipelineViewportStateCreateInfo viewportInfo = {};
+    viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportInfo.viewportCount = 1;
+    viewportInfo.pViewports = &viewport;
+    viewportInfo.scissorCount = 1;
+    viewportInfo.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rastInfo = {};
+    rastInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rastInfo.polygonMode = VK_POLYGON_MODE_FILL;
+    rastInfo.lineWidth = 1;
+    rastInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+    rastInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo msaaInfo = {};
+    msaaInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    msaaInfo.sampleShadingEnable = VK_FALSE;
+    msaaInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    msaaInfo.minSampleShading = 1;
+
+    VkPipelineColorBlendAttachmentState blendState = {};
+    blendState.colorWriteMask = 
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendState.blendEnable = VK_TRUE;
+    blendState.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendState.colorBlendOp = VK_BLEND_OP_ADD;
+    blendState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendState.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo blendInfo = {};
+    blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blendInfo.logicOpEnable = VK_FALSE;
+    blendInfo.attachmentCount = 1;
+    blendInfo.pAttachments = &blendState;
+
+    //dynamic state here
+
+    VkPipelineLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    VKDO(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout));
+
+    VkGraphicsPipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &inputInfo;
+    pipelineInfo.pInputAssemblyState = &assemInfo;
+    pipelineInfo.pViewportState = &viewportInfo;
+    pipelineInfo.pRasterizationState = &rastInfo;
+    pipelineInfo.pMultisampleState = &msaaInfo;
+    pipelineInfo.pColorBlendState = &blendInfo;
+    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.subpass = 0;
+    VKDO(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline));
+
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
+
+    FNCOK
 }
 
 void VulkanAPI::DestroySurface() {
@@ -192,6 +379,12 @@ void VulkanAPI::DestroySurface() {
 }
 
 void VulkanAPI::Exit() {
+    vkDestroyPipeline(device, pipeline, nullptr);
+    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    vkDestroyRenderPass(device, renderPass, nullptr);
+    for (auto v : swapchainImageViews) {
+        vkDestroyImageView(device, v, nullptr);
+    }
     vkDestroySwapchainKHR(device, swapchain, nullptr);
     vkDestroyDevice(device, nullptr);
 

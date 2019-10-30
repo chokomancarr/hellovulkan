@@ -34,6 +34,8 @@ int main() {
     VulkanAPI::CreateSurface();
     VulkanAPI::InitDevice();
     VulkanAPI::CreateSwapchain();
+    VulkanAPI::CreateRenderPass();
+    VulkanAPI::CreateGraphicsPipeline();
 
     while (!glfwWindowShouldClose(VulkanAPI::window)) {
         glfwPollEvents();

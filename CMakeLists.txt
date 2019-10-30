@@ -57,7 +57,6 @@ else()
 endif()
 
 set(SOURCES)
-set(HEADERS)
 
 include_directories(${INC_DIRS})
 link_directories(${LINK_DIRS})
@@ -68,5 +67,5 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/bin/)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-add_executable(hellovulkan ${SOURCES} ${HEADERS})
+add_executable(hellovulkan ${SOURCES})
 target_link_libraries(hellovulkan ${LIBS})
